@@ -44,6 +44,7 @@ export async function PATCH(request: Request, { params }: Params) {
     await campaignRef.set(
       {
         name: parsed.data.name,
+        nameLower: parsed.data.name.toLowerCase(),
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { FieldPath } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 import { getDb } from "@/lib/firebaseAdmin";
@@ -15,6 +16,8 @@ const addReelSchema = z.object({
   bulkText: z.string().trim().optional(),
 });
 
+const DEFAULT_LIMIT = 25;
+
 type Params = {
   params: Promise<{ campaignId: string }>;
 };
@@ -22,17 +25,34 @@ type Params = {
 export async function GET(_: Request, { params }: Params) {
   try {
     const { campaignId } = await params;
+    const requestUrl = new URL(_.url);
+    const limit = Number(requestUrl.searchParams.get("limit") || DEFAULT_LIMIT);
+    const cursorId = requestUrl.searchParams.get("cursorId") || "";
     const db = getDb();
 
-    const snapshot = await db
+    let query = db
       .collection("campaigns")
       .doc(campaignId)
       .collection("reels")
       .orderBy("updatedAt", "desc")
-      .get();
+      .orderBy(FieldPath.documentId(), "desc");
+
+    if (cursorId) {
+      const cursorSnapshot = await db.collection("campaigns").doc(campaignId).collection("reels").doc(cursorId).get();
+      if (cursorSnapshot.exists) {
+        query = query.startAfter(cursorSnapshot);
+      }
+    }
+
+    const snapshot = await query.limit(Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_LIMIT).get();
+    const lastDoc = snapshot.docs[snapshot.docs.length - 1] || null;
 
     const reels = snapshot.docs.map((doc) => serializeReel(doc.id, doc.data()));
-    return NextResponse.json({ reels });
+    return NextResponse.json({
+      reels,
+      nextCursorId: lastDoc?.id || null,
+      hasMore: snapshot.size === (Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_LIMIT),
+    });
   } catch (error) {
     return NextResponse.json(
       { message: error instanceof Error ? error.message : "Failed to load reels" },
@@ -79,18 +99,17 @@ export async function POST(request: Request, { params }: Params) {
 
     const db = getDb();
     const reelsCollection = db.collection("campaigns").doc(campaignId).collection("reels");
-    const existingSnapshot = await reelsCollection.get();
-    const existingShortcodes = new Set(existingSnapshot.docs.map((doc) => doc.id));
-
     const addedReels = [] as Awaited<ReturnType<typeof fetchReelAnalyticsByShortcode>>[];
 
     for (const input of validInputs) {
-      if (existingShortcodes.has(input.shortcode)) {
+      const reelRef = reelsCollection.doc(input.shortcode);
+      const existing = await reelRef.get();
+
+      if (existing.exists) {
         continue;
       }
 
       const analytics = await fetchReelAnalyticsByShortcode(input.shortcode);
-      const reelRef = reelsCollection.doc(input.shortcode);
 
       await reelRef.set(
         {
@@ -102,7 +121,6 @@ export async function POST(request: Request, { params }: Params) {
         { merge: true },
       );
 
-      existingShortcodes.add(input.shortcode);
       addedReels.push(analytics);
     }
 

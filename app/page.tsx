@@ -1,7 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { extractReelInputsFromText } from "@/lib/instagram";
+
+const CAMPAIGN_PAGE_SIZE = 25;
+const REEL_PAGE_SIZE = 25;
 
 type Campaign = {
   id: string;
@@ -31,6 +34,10 @@ export default function Home() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [reels, setReels] = useState<Reel[]>([]);
+  const [campaignCursorId, setCampaignCursorId] = useState<string>("");
+  const [campaignHasMore, setCampaignHasMore] = useState(false);
+  const [reelCursorId, setReelCursorId] = useState<string>("");
+  const [reelsHasMore, setReelsHasMore] = useState(false);
 
   const [campaignName, setCampaignName] = useState("");
   const [campaignSearch, setCampaignSearch] = useState("");
@@ -39,93 +46,173 @@ export default function Home() {
   const [reelText, setReelText] = useState("");
 
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
+  const [loadingMoreCampaigns, setLoadingMoreCampaigns] = useState(false);
   const [loadingReels, setLoadingReels] = useState(false);
+  const [loadingMoreReels, setLoadingMoreReels] = useState(false);
   const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [addingReel, setAddingReel] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [addProgress, setAddProgress] = useState<{ current: number; total: number; shortcode?: string } | null>(null);
-  const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null);
+  const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number; shortcode?: string } | null>(null);
   const [refreshingReelIds, setRefreshingReelIds] = useState<string[]>([]);
+  const [justUpdatedReelIds, setJustUpdatedReelIds] = useState<string[]>([]);
+  const [refreshWarningReelIds, setRefreshWarningReelIds] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
+  const campaignsRequestRef = useRef(0);
+  const reelsRequestRef = useRef(0);
 
   const selectedCampaign = useMemo(
     () => campaigns.find((campaign) => campaign.id === selectedCampaignId),
     [campaigns, selectedCampaignId],
   );
 
-  const filteredCampaigns = useMemo(() => {
-    const normalizedSearch = campaignSearch.trim().toLowerCase();
-
-    if (!normalizedSearch) {
-      return campaigns;
-    }
-
-    return campaigns.filter((campaign) => campaign.name.toLowerCase().includes(normalizedSearch));
-  }, [campaignSearch, campaigns]);
-
   const refreshingReelIdSet = useMemo(() => new Set(refreshingReelIds), [refreshingReelIds]);
+  const justUpdatedReelIdSet = useMemo(() => new Set(justUpdatedReelIds), [justUpdatedReelIds]);
+  const refreshWarningReelIdSet = useMemo(() => new Set(refreshWarningReelIds), [refreshWarningReelIds]);
 
-  const loadCampaigns = useCallback(async () => {
-    setLoadingCampaigns(true);
-    setError("");
-    try {
-      const response = await fetch("/api/campaigns", { cache: "no-store" });
-      const payload = await response.json();
+  const loadCampaigns = useCallback(
+    async ({ append = false, cursorId = "", query = campaignSearch.trim() }: { append?: boolean; cursorId?: string; query?: string } = {}) => {
+      const requestId = ++campaignsRequestRef.current;
 
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to load campaigns");
+      if (append) {
+        setLoadingMoreCampaigns(true);
+      } else {
+        setLoadingCampaigns(true);
       }
 
-      const loadedCampaigns: Campaign[] = payload.campaigns || [];
-      setCampaigns(loadedCampaigns);
+      setError("");
 
-      if (!selectedCampaignId && loadedCampaigns.length > 0) {
-        setSelectedCampaignId(loadedCampaigns[0].id);
+      try {
+        const search = query.trim();
+        const params = new URLSearchParams();
+        params.set("limit", String(CAMPAIGN_PAGE_SIZE));
+        if (search) {
+          params.set("q", search);
+        }
+        if (cursorId) {
+          params.set("cursorId", cursorId);
+        }
+
+        const response = await fetch(`/api/campaigns?${params.toString()}`, { cache: "no-store" });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to load campaigns");
+        }
+
+        if (requestId !== campaignsRequestRef.current) {
+          return;
+        }
+
+        const loadedCampaigns: Campaign[] = payload.campaigns || [];
+        setCampaigns((current) => {
+          if (!append) {
+            return loadedCampaigns;
+          }
+
+          const knownIds = new Set(current.map((campaign) => campaign.id));
+          return [...current, ...loadedCampaigns.filter((campaign) => !knownIds.has(campaign.id))];
+        });
+        setCampaignCursorId(payload.nextCursorId || "");
+        setCampaignHasMore(Boolean(payload.hasMore));
+
+        setSelectedCampaignId((current) => current || loadedCampaigns[0]?.id || "");
+      } catch (err) {
+        if (requestId === campaignsRequestRef.current) {
+          setError(err instanceof Error ? err.message : "Failed to load campaigns");
+        }
+      } finally {
+        if (requestId === campaignsRequestRef.current) {
+          if (append) {
+            setLoadingMoreCampaigns(false);
+          } else {
+            setLoadingCampaigns(false);
+          }
+        }
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load campaigns");
-    } finally {
-      setLoadingCampaigns(false);
-    }
-  }, [selectedCampaignId]);
+    },
+    [campaignSearch],
+  );
 
-  const loadReels = useCallback(async (campaignId: string) => {
-    if (!campaignId) {
-      setReels([]);
-      return;
-    }
-
-    setLoadingReels(true);
-    setError("");
-
-    try {
-      const response = await fetch(`/api/campaigns/${campaignId}/reels`, { cache: "no-store" });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to load reels");
+  const loadReels = useCallback(
+    async ({ campaignId, append = false, cursorId = "" }: { campaignId: string; append?: boolean; cursorId?: string }) => {
+      if (!campaignId) {
+        setReels([]);
+        setReelCursorId("");
+        setReelsHasMore(false);
+        setRefreshWarningReelIds([]);
+        return;
       }
 
-      setReels(payload.reels || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load reels");
-    } finally {
-      setLoadingReels(false);
-    }
-  }, []);
+      const requestId = ++reelsRequestRef.current;
+
+      if (append) {
+        setLoadingMoreReels(true);
+      } else {
+        setLoadingReels(true);
+      }
+
+      setError("");
+
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", String(REEL_PAGE_SIZE));
+        if (cursorId) {
+          params.set("cursorId", cursorId);
+        }
+
+        const response = await fetch(`/api/campaigns/${campaignId}/reels?${params.toString()}`, { cache: "no-store" });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to load reels");
+        }
+
+        if (requestId !== reelsRequestRef.current) {
+          return;
+        }
+
+        const loadedReels: Reel[] = payload.reels || [];
+        setRefreshWarningReelIds([]);
+        setReels((current) => {
+          if (!append) {
+            return loadedReels;
+          }
+
+          const knownIds = new Set(current.map((reel) => reel.id));
+          return [...current, ...loadedReels.filter((reel) => !knownIds.has(reel.id))];
+        });
+        setReelCursorId(payload.nextCursorId || "");
+        setReelsHasMore(Boolean(payload.hasMore));
+      } catch (err) {
+        if (requestId === reelsRequestRef.current) {
+          setError(err instanceof Error ? err.message : "Failed to load reels");
+        }
+      } finally {
+        if (requestId === reelsRequestRef.current) {
+          if (append) {
+            setLoadingMoreReels(false);
+          } else {
+            setLoadingReels(false);
+          }
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      void loadCampaigns();
-    }, 0);
+      void loadCampaigns({ query: campaignSearch.trim() });
+    }, 250);
 
     return () => clearTimeout(timeoutId);
-  }, [loadCampaigns]);
+  }, [campaignSearch, loadCampaigns]);
 
   useEffect(() => {
     if (selectedCampaignId) {
       const timeoutId = setTimeout(() => {
-        void loadReels(selectedCampaignId);
+        void loadReels({ campaignId: selectedCampaignId });
       }, 0);
 
       return () => clearTimeout(timeoutId);
@@ -133,6 +220,22 @@ export default function Home() {
 
     return undefined;
   }, [selectedCampaignId, loadReels]);
+
+  function loadMoreCampaigns() {
+    if (!campaignHasMore || loadingMoreCampaigns) {
+      return;
+    }
+
+    void loadCampaigns({ append: true, cursorId: campaignCursorId, query: campaignSearch.trim() });
+  }
+
+  function loadMoreReels() {
+    if (!selectedCampaignId || !reelsHasMore || loadingMoreReels) {
+      return;
+    }
+
+    void loadReels({ campaignId: selectedCampaignId, append: true, cursorId: reelCursorId });
+  }
 
   async function handleCreateCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,6 +264,7 @@ export default function Home() {
       setSelectedCampaignId(createdCampaign.id);
       setCampaignName("");
       setReels([]);
+      setRefreshWarningReelIds([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create campaign");
     } finally {
@@ -261,9 +365,13 @@ export default function Home() {
             const withoutDuplicate = current.filter((reel) => reel.id !== payload.reel.id);
             return [payload.reel, ...withoutDuplicate];
           });
+          setRefreshWarningReelIds((current) => current.filter((id) => id !== payload.reel.id));
+          setJustUpdatedReelIds((current) => [...current, payload.reel.id]);
+          setTimeout(() => {
+            setJustUpdatedReelIds((current) => current.filter((id) => id !== payload.reel.id));
+          }, 2000);
         }
 
-        await loadCampaigns();
       }
 
       setReelText("");
@@ -288,16 +396,17 @@ export default function Home() {
 
     setRefreshing(true);
     setError("");
-    setRefreshProgress({ current: 0, total: reels.length });
-    setRefreshingReelIds(reels.map((reel) => reel.id));
+    const snapshot = [...reels];
+    setRefreshProgress({ current: 0, total: snapshot.length });
+    setRefreshingReelIds(snapshot.map((reel) => reel.id));
 
-    try {
-      const snapshot = [...reels];
+    let errorCount = 0;
 
-      for (let index = 0; index < snapshot.length; index += 1) {
-        const reel = snapshot[index];
-        setRefreshProgress({ current: index + 1, total: snapshot.length });
+    for (let index = 0; index < snapshot.length; index += 1) {
+      const reel = snapshot[index];
+      setRefreshProgress({ current: index + 1, total: snapshot.length, shortcode: reel.shortcode });
 
+      try {
         const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels/${reel.id}/refresh`, {
           method: "POST",
         });
@@ -309,19 +418,27 @@ export default function Home() {
 
         if (payload.reel) {
           setReels((current) => current.map((item) => (item.id === reel.id ? payload.reel : item)));
+          setRefreshWarningReelIds((current) => current.filter((id) => id !== reel.id));
+          setJustUpdatedReelIds((current) => [...current, reel.id]);
+          setTimeout(() => {
+            setJustUpdatedReelIds((current) => current.filter((id) => id !== reel.id));
+          }, 2000);
         }
-
+      } catch {
+        errorCount += 1;
+        setRefreshWarningReelIds((current) => (current.includes(reel.id) ? current : [...current, reel.id]));
+      } finally {
         setRefreshingReelIds((current) => current.filter((id) => id !== reel.id));
       }
-
-      await loadCampaigns();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh campaign");
-    } finally {
-      setRefreshing(false);
-      setRefreshProgress(null);
-      setRefreshingReelIds([]);
     }
+
+    if (errorCount > 0) {
+      setError(`${errorCount} reel${errorCount === 1 ? "" : "s"} failed to refresh.`);
+    }
+
+    setRefreshing(false);
+    setRefreshProgress(null);
+    setRefreshingReelIds([]);
   }
 
   async function handleDeleteCampaign(campaignId: string) {
@@ -354,6 +471,41 @@ export default function Home() {
     }
   }
 
+  async function handleRefreshReel(reelId: string) {
+    if (!selectedCampaignId) {
+      return;
+    }
+
+    setError("");
+    setRefreshingReelIds((current) => [...current, reelId]);
+
+    try {
+      const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels/${reelId}/refresh`, {
+        method: "POST",
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to refresh reel");
+      }
+
+      if (payload.reel) {
+        setReels((current) => current.map((item) => (item.id === reelId ? payload.reel : item)));
+        setRefreshWarningReelIds((current) => current.filter((id) => id !== reelId));
+        setJustUpdatedReelIds((current) => [...current, reelId]);
+        setTimeout(() => {
+          setJustUpdatedReelIds((current) => current.filter((id) => id !== reelId));
+        }, 2000);
+      }
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh reel");
+      setRefreshWarningReelIds((current) => (current.includes(reelId) ? current : [...current, reelId]));
+    } finally {
+      setRefreshingReelIds((current) => current.filter((id) => id !== reelId));
+    }
+  }
+
   async function handleDeleteReel(reelId: string) {
     if (!selectedCampaignId || !window.confirm("Delete this reel from the campaign?")) {
       return;
@@ -372,7 +524,7 @@ export default function Home() {
       }
 
       setReels((current) => current.filter((reel) => reel.id !== reelId));
-      await loadCampaigns();
+      setRefreshWarningReelIds((current) => current.filter((id) => id !== reelId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete reel");
     }
@@ -402,6 +554,7 @@ export default function Home() {
       {refreshProgress ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
           Refreshing reel {refreshProgress.current} of {refreshProgress.total}
+          {refreshProgress.shortcode ? ` - ${refreshProgress.shortcode}` : ""}
         </div>
       ) : null}
 
@@ -438,10 +591,12 @@ export default function Home() {
             {loadingCampaigns ? <p className="text-sm text-slate-500">Loading campaigns...</p> : null}
 
             {!loadingCampaigns && campaigns.length === 0 ? (
-              <p className="text-sm text-slate-500">No campaigns yet. Create your first campaign.</p>
+              <p className="text-sm text-slate-500">
+                {campaignSearch.trim() ? "No campaigns match your search." : "No campaigns yet. Create your first campaign."}
+              </p>
             ) : null}
 
-            {filteredCampaigns.map((campaign) => (
+            {campaigns.map((campaign) => (
               <div
                 key={campaign.id}
                 className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition ${
@@ -503,8 +658,15 @@ export default function Home() {
                 </div>
               </div>
             ))}
-            {campaignSearch.trim() && filteredCampaigns.length === 0 ? (
-              <p className="text-sm text-slate-500">No campaigns match your search.</p>
+            {campaignHasMore ? (
+              <button
+                type="button"
+                onClick={loadMoreCampaigns}
+                disabled={loadingMoreCampaigns}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMoreCampaigns ? "Loading more..." : "Load more campaigns"}
+              </button>
             ) : null}
           </div>
         </section>
@@ -524,7 +686,7 @@ export default function Home() {
               disabled={!selectedCampaignId || refreshing}
               className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {refreshing ? "Refreshing all reels..." : "Refresh All Reels"}
+              {refreshing ? "Refreshing visible reels..." : "Refresh Visible Reels"}
             </button>
           </div>
 
@@ -586,8 +748,12 @@ export default function Home() {
                 {reels.map((reel) => (
                   <tr
                     key={reel.id}
-                    className={`border-t border-slate-100 transition ${
-                      refreshingReelIdSet.has(reel.id) ? "opacity-50 blur-[0.6px]" : ""
+                    className={`border-t border-slate-100 transition-all duration-500 ${
+                      refreshingReelIdSet.has(reel.id)
+                        ? "bg-slate-100 opacity-40"
+                        : justUpdatedReelIdSet.has(reel.id)
+                        ? "bg-teal-50/60"
+                        : ""
                     }`}
                   >
                     <td className="px-3 py-3 font-medium text-slate-900">{reel.username || "-"}</td>
@@ -609,12 +775,37 @@ export default function Home() {
                         "-"
                       )}
                     </td>
-                    <td className="px-3 py-3">{formatNumber(reel.followers)}</td>
-                    <td className="px-3 py-3">{formatNumber(reel.views)}</td>
-                    <td className="px-3 py-3">{formatNumber(reel.comments)}</td>
-                    <td className="px-3 py-3">{formatNumber(reel.likes)}</td>
+                    <td className="px-3 py-3">
+                      {refreshingReelIdSet.has(reel.id) ? <span className="text-slate-300">—</span> : formatNumber(reel.followers)}
+                    </td>
+                    <td className="px-3 py-3">
+                      {refreshingReelIdSet.has(reel.id) ? <span className="text-slate-300">—</span> : formatNumber(reel.views)}
+                    </td>
+                    <td className="px-3 py-3">
+                      {refreshingReelIdSet.has(reel.id) ? <span className="text-slate-300">—</span> : formatNumber(reel.comments)}
+                    </td>
+                    <td className="px-3 py-3">
+                      {refreshingReelIdSet.has(reel.id) ? <span className="text-slate-300">—</span> : formatNumber(reel.likes)}
+                    </td>
                     <td className="px-3 py-3">
                       <div className="flex gap-2">
+                        {refreshWarningReelIdSet.has(reel.id) ? (
+                          <span
+                            className="inline-flex items-center self-center text-amber-500"
+                            title="Refresh failed. Keeping previous values."
+                            aria-label="Refresh failed"
+                          >
+                            ⚠
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void handleRefreshReel(reel.id)}
+                          disabled={refreshingReelIdSet.has(reel.id)}
+                          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {refreshingReelIdSet.has(reel.id) ? "Refreshing..." : "Refresh"}
+                        </button>
                         <button
                           type="button"
                           onClick={() => void handleDeleteReel(reel.id)}
@@ -622,11 +813,6 @@ export default function Home() {
                         >
                           Delete
                         </button>
-                        {refreshingReelIdSet.has(reel.id) ? (
-                          <span className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-500">
-                            Refreshing...
-                          </span>
-                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -634,6 +820,19 @@ export default function Home() {
               </tbody>
             </table>
           </div>
+
+          {reelsHasMore ? (
+            <div className="mt-3 flex justify-center">
+              <button
+                type="button"
+                onClick={loadMoreReels}
+                disabled={loadingMoreReels}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMoreReels ? "Loading more reels..." : "Load more reels"}
+              </button>
+            </div>
+          ) : null}
         </section>
       </main>
     </div>
