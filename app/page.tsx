@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { extractReelInputsFromText } from "@/lib/instagram";
 
 type Campaign = {
   id: string;
@@ -32,7 +33,7 @@ export default function Home() {
   const [reels, setReels] = useState<Reel[]>([]);
 
   const [campaignName, setCampaignName] = useState("");
-  const [reelUrl, setReelUrl] = useState("");
+  const [reelText, setReelText] = useState("");
 
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
   const [loadingReels, setLoadingReels] = useState(false);
@@ -152,7 +153,14 @@ export default function Home() {
   async function handleAddReel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!selectedCampaignId || !reelUrl.trim()) {
+    if (!selectedCampaignId || !reelText.trim()) {
+      return;
+    }
+
+    const parsedReels = extractReelInputsFromText(reelText);
+
+    if (parsedReels.length === 0) {
+      setError("Paste one or more valid Instagram reel URLs.");
       return;
     }
 
@@ -163,7 +171,10 @@ export default function Home() {
       const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reelUrl: reelUrl.trim() }),
+        body: JSON.stringify({
+          bulkText: reelText.trim(),
+          reelUrls: parsedReels.map((item) => item.reelUrl),
+        }),
       });
 
       const payload = await response.json();
@@ -171,9 +182,13 @@ export default function Home() {
         throw new Error(payload?.message || "Failed to add reel");
       }
 
-      setReelUrl("");
+      setReelText("");
       await loadReels(selectedCampaignId);
       await loadCampaigns();
+
+      if (payload.skippedCount > 0 && payload.addedCount === 0) {
+        setError("All pasted reels were duplicates and were ignored.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add reel");
     } finally {
@@ -351,21 +366,25 @@ export default function Home() {
             </button>
           </div>
 
-          <form onSubmit={handleAddReel} className="mt-4 flex flex-col gap-2 md:flex-row">
-            <input
-              type="url"
-              value={reelUrl}
-              onChange={(event) => setReelUrl(event.target.value)}
-              placeholder="Paste Instagram reel URL"
+          <form onSubmit={handleAddReel} className="mt-4 flex flex-col gap-2">
+            <textarea
+              value={reelText}
+              onChange={(event) => setReelText(event.target.value)}
+              placeholder={
+                selectedCampaignId
+                  ? "Paste one or more Instagram reel URLs here, one per line or mixed into text."
+                  : "Select a campaign first"
+              }
               disabled={!selectedCampaignId}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:bg-slate-100"
+              rows={6}
+              className="min-h-32 w-full resize-y rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none ring-teal-500 transition focus:ring-2 disabled:cursor-not-allowed disabled:bg-slate-100"
             />
             <button
               type="submit"
               disabled={!selectedCampaignId || addingReel}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {addingReel ? "Adding..." : "Add Reel"}
+              {addingReel ? "Adding..." : "Add Reels"}
             </button>
           </form>
 

@@ -9,6 +9,11 @@ export type ReelAnalytics = {
   likes: number;
 };
 
+export type ParsedReelInput = {
+  shortcode: string;
+  reelUrl: string;
+};
+
 function toNumber(value: unknown): number {
   if (typeof value === "number") {
     return value;
@@ -72,6 +77,28 @@ export function extractShortcodeFromUrl(reelUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function extractReelInputsFromText(text: string): ParsedReelInput[] {
+  const reelUrlPattern = /https?:\/\/(?:www\.)?instagram\.com\/(?:reel|p|tv)\/[A-Za-z0-9_-]+\/?(?:\?[^^\s]*)?/gi;
+  const matches = text.match(reelUrlPattern) || [];
+  const seen = new Set<string>();
+  const parsedInputs: ParsedReelInput[] = [];
+
+  for (const match of matches) {
+    const shortcode = extractShortcodeFromUrl(match);
+    if (!shortcode || seen.has(shortcode)) {
+      continue;
+    }
+
+    seen.add(shortcode);
+    parsedInputs.push({
+      shortcode,
+      reelUrl: match.replace(/[),.;\]]+$/u, ""),
+    });
+  }
+
+  return parsedInputs;
 }
 
 function extractItem(raw: unknown): RocketMediaItem {
