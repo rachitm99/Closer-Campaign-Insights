@@ -82,4 +82,4 @@ No login is implemented yet. You can add auth later.
 
 If you want to keep production data isolated from your other project, create a separate Firestore database in the same Firebase project and point FIREBASE_DATABASE_ID to that database name.
 
-Next.js route handlers under src/app/api will run as Vercel server functions, so no separate backend hosting is needed.
+Next.js route handlers under app/api will run as Vercel server functions, so no separate backend hosting is needed.
