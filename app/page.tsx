@@ -208,6 +208,60 @@ export default function Home() {
     }
   }
 
+  async function handleDeleteCampaign(campaignId: string) {
+    const campaign = campaigns.find((item) => item.id === campaignId);
+    if (!campaign || !window.confirm(`Delete campaign \"${campaign.name}\" and all its reels?`)) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}`, {
+        method: "DELETE",
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to delete campaign");
+      }
+
+      const remainingCampaigns = campaigns.filter((item) => item.id !== campaignId);
+      setCampaigns(remainingCampaigns);
+
+      if (selectedCampaignId === campaignId) {
+        setSelectedCampaignId(remainingCampaigns[0]?.id || "");
+        setReels([]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete campaign");
+    }
+  }
+
+  async function handleDeleteReel(reelId: string) {
+    if (!selectedCampaignId || !window.confirm("Delete this reel from the campaign?")) {
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels/${reelId}`, {
+        method: "DELETE",
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to delete reel");
+      }
+
+      setReels((current) => current.filter((reel) => reel.id !== reelId));
+      await loadCampaigns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete reel");
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-6 md:px-6">
       <header className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -251,18 +305,29 @@ export default function Home() {
             ) : null}
 
             {campaigns.map((campaign) => (
-              <button
+              <div
                 key={campaign.id}
-                onClick={() => setSelectedCampaignId(campaign.id)}
-                className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition ${
                   campaign.id === selectedCampaignId
                     ? "border-teal-600 bg-teal-50 text-teal-900"
                     : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
                 }`}
-                type="button"
               >
-                <p className="text-sm font-semibold">{campaign.name}</p>
-              </button>
+                <button
+                  onClick={() => setSelectedCampaignId(campaign.id)}
+                  className="flex-1 text-left"
+                  type="button"
+                >
+                  <p className="text-sm font-semibold">{campaign.name}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteCampaign(campaign.id)}
+                  className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
         </section>
@@ -314,13 +379,14 @@ export default function Home() {
                   <th className="px-3 py-3 font-semibold">Total Followers</th>
                   <th className="px-3 py-3 font-semibold">Total Views</th>
                   <th className="px-3 py-3 font-semibold">Total Comments</th>
-                  <th className="px-3 py-3 font-semibold">Total Likes</th>
+                  <th className="px-3 py-3 font-semibold">Likes</th>
+                  <th className="px-3 py-3 font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {loadingReels ? (
                   <tr>
-                    <td className="px-3 py-5 text-slate-500" colSpan={7}>
+                    <td className="px-3 py-5 text-slate-500" colSpan={8}>
                       Loading reels...
                     </td>
                   </tr>
@@ -328,7 +394,7 @@ export default function Home() {
 
                 {!loadingReels && reels.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-5 text-slate-500" colSpan={7}>
+                    <td className="px-3 py-5 text-slate-500" colSpan={8}>
                       {selectedCampaignId
                         ? "No reels in this campaign yet. Add a reel URL to begin."
                         : "Create or select a campaign to manage reels."}
@@ -361,6 +427,15 @@ export default function Home() {
                     <td className="px-3 py-3">{formatNumber(reel.views)}</td>
                     <td className="px-3 py-3">{formatNumber(reel.comments)}</td>
                     <td className="px-3 py-3">{formatNumber(reel.likes)}</td>
+                    <td className="px-3 py-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteReel(reel.id)}
+                        className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
