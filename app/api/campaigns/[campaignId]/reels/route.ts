@@ -116,6 +116,19 @@ export async function POST(request: Request, { params }: Params) {
     const updated = await reelsCollection.orderBy("updatedAt", "desc").get();
     const reels = updated.docs.map((doc) => serializeReel(doc.id, doc.data()));
 
+    if (validInputs.length === 1) {
+      const addedReel = reels.find((reel) => reel.shortcode === validInputs[0].shortcode);
+
+      return NextResponse.json(
+        {
+          reel: addedReel ?? null,
+          addedCount: addedReels.length,
+          skippedCount: validInputs.length - addedReels.length,
+        },
+        { status: addedReel ? 201 : 200 },
+      );
+    }
+
     return NextResponse.json(
       { reels, addedCount: addedReels.length, skippedCount: validInputs.length - addedReels.length },
       { status: 201 },

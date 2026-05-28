@@ -43,6 +43,9 @@ export default function Home() {
   const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [addingReel, setAddingReel] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [addProgress, setAddProgress] = useState<{ current: number; total: number; shortcode?: string } | null>(null);
+  const [refreshProgress, setRefreshProgress] = useState<{ current: number; total: number } | null>(null);
+  const [refreshingReelIds, setRefreshingReelIds] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
 
   const selectedCampaign = useMemo(
@@ -59,6 +62,8 @@ export default function Home() {
 
     return campaigns.filter((campaign) => campaign.name.toLowerCase().includes(normalizedSearch));
   }, [campaignSearch, campaigns]);
+
+  const refreshingReelIdSet = useMemo(() => new Set(refreshingReelIds), [refreshingReelIds]);
 
   const loadCampaigns = useCallback(async () => {
     setLoadingCampaigns(true);
@@ -226,33 +231,53 @@ export default function Home() {
 
     setAddingReel(true);
     setError("");
+    setAddProgress({ current: 0, total: parsedReels.length });
 
     try {
-      const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bulkText: reelText.trim(),
-          reelUrls: parsedReels.map((item) => item.reelUrl),
-        }),
-      });
+      let addedCount = 0;
+      let skippedCount = 0;
 
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to add reel");
+      for (let index = 0; index < parsedReels.length; index += 1) {
+        const item = parsedReels[index];
+
+        setAddProgress({ current: index + 1, total: parsedReels.length, shortcode: item.shortcode });
+
+        const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reelUrl: item.reelUrl }),
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to add reel");
+        }
+
+        addedCount += payload.addedCount || 0;
+        skippedCount += payload.skippedCount || 0;
+
+        if (payload.reel) {
+          setReels((current) => {
+            const withoutDuplicate = current.filter((reel) => reel.id !== payload.reel.id);
+            return [payload.reel, ...withoutDuplicate];
+          });
+        }
+
+        await loadCampaigns();
       }
 
       setReelText("");
-      await loadReels(selectedCampaignId);
-      await loadCampaigns();
 
-      if (payload.skippedCount > 0 && payload.addedCount === 0) {
+      if (skippedCount > 0 && addedCount === 0) {
         setError("All pasted reels were duplicates and were ignored.");
+      } else if (skippedCount > 0) {
+        setError(`${skippedCount} duplicate reel${skippedCount === 1 ? " was" : "s were"} ignored.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add reel");
     } finally {
       setAddingReel(false);
+      setAddProgress(null);
     }
   }
 
@@ -263,23 +288,39 @@ export default function Home() {
 
     setRefreshing(true);
     setError("");
+    setRefreshProgress({ current: 0, total: reels.length });
+    setRefreshingReelIds(reels.map((reel) => reel.id));
 
     try {
-      const response = await fetch(`/api/campaigns/${selectedCampaignId}/refresh`, {
-        method: "POST",
-      });
+      const snapshot = [...reels];
 
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.message || "Failed to refresh campaign");
+      for (let index = 0; index < snapshot.length; index += 1) {
+        const reel = snapshot[index];
+        setRefreshProgress({ current: index + 1, total: snapshot.length });
+
+        const response = await fetch(`/api/campaigns/${selectedCampaignId}/reels/${reel.id}/refresh`, {
+          method: "POST",
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to refresh reel");
+        }
+
+        if (payload.reel) {
+          setReels((current) => current.map((item) => (item.id === reel.id ? payload.reel : item)));
+        }
+
+        setRefreshingReelIds((current) => current.filter((id) => id !== reel.id));
       }
 
-      setReels(payload.reels || []);
       await loadCampaigns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh campaign");
     } finally {
       setRefreshing(false);
+      setRefreshProgress(null);
+      setRefreshingReelIds([]);
     }
   }
 
@@ -349,6 +390,19 @@ export default function Home() {
 
       {error ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+      ) : null}
+
+      {addProgress ? (
+        <div className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-800">
+          Adding reel {addProgress.current} of {addProgress.total}
+          {addProgress.shortcode ? ` - ${addProgress.shortcode}` : ""}
+        </div>
+      ) : null}
+
+      {refreshProgress ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          Refreshing reel {refreshProgress.current} of {refreshProgress.total}
+        </div>
       ) : null}
 
       <main className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-[300px_1fr]">
@@ -530,7 +584,12 @@ export default function Home() {
                 ) : null}
 
                 {reels.map((reel) => (
-                  <tr key={reel.id} className="border-t border-slate-100">
+                  <tr
+                    key={reel.id}
+                    className={`border-t border-slate-100 transition ${
+                      refreshingReelIdSet.has(reel.id) ? "opacity-50 blur-[0.6px]" : ""
+                    }`}
+                  >
                     <td className="px-3 py-3 font-medium text-slate-900">{reel.username || "-"}</td>
                     <td className="px-3 py-3">
                       {reel.profileUrl ? (
@@ -555,13 +614,20 @@ export default function Home() {
                     <td className="px-3 py-3">{formatNumber(reel.comments)}</td>
                     <td className="px-3 py-3">{formatNumber(reel.likes)}</td>
                     <td className="px-3 py-3">
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteReel(reel.id)}
-                        className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
-                      >
-                        Delete
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteReel(reel.id)}
+                          className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                        >
+                          Delete
+                        </button>
+                        {refreshingReelIdSet.has(reel.id) ? (
+                          <span className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-500">
+                            Refreshing...
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
