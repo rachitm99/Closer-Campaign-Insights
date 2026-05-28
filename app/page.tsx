@@ -33,6 +33,9 @@ export default function Home() {
   const [reels, setReels] = useState<Reel[]>([]);
 
   const [campaignName, setCampaignName] = useState("");
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const [editingCampaignId, setEditingCampaignId] = useState<string>("");
+  const [editingCampaignName, setEditingCampaignName] = useState("");
   const [reelText, setReelText] = useState("");
 
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
@@ -46,6 +49,16 @@ export default function Home() {
     () => campaigns.find((campaign) => campaign.id === selectedCampaignId),
     [campaigns, selectedCampaignId],
   );
+
+  const filteredCampaigns = useMemo(() => {
+    const normalizedSearch = campaignSearch.trim().toLowerCase();
+
+    if (!normalizedSearch) {
+      return campaigns;
+    }
+
+    return campaigns.filter((campaign) => campaign.name.toLowerCase().includes(normalizedSearch));
+  }, [campaignSearch, campaigns]);
 
   const loadCampaigns = useCallback(async () => {
     setLoadingCampaigns(true);
@@ -147,6 +160,53 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Failed to create campaign");
     } finally {
       setCreatingCampaign(false);
+    }
+  }
+
+  function beginEditCampaign(campaignId: string) {
+    const campaign = campaigns.find((item) => item.id === campaignId);
+    if (!campaign) {
+      return;
+    }
+
+    setEditingCampaignId(campaignId);
+    setEditingCampaignName(campaign.name);
+  }
+
+  function cancelEditCampaign() {
+    setEditingCampaignId("");
+    setEditingCampaignName("");
+  }
+
+  async function handleUpdateCampaign(campaignId: string) {
+    const nextName = editingCampaignName.trim();
+
+    if (!nextName) {
+      setError("Campaign name is required.");
+      return;
+    }
+
+    setError("");
+
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nextName }),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to update campaign");
+      }
+
+      const updatedCampaign = payload.campaign as Campaign;
+      setCampaigns((current) => current.map((item) => (item.id === campaignId ? updatedCampaign : item)));
+      setSelectedCampaignId(campaignId);
+      cancelEditCampaign();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update campaign");
     }
   }
 
@@ -312,6 +372,14 @@ export default function Home() {
             </button>
           </form>
 
+          <input
+            type="search"
+            value={campaignSearch}
+            onChange={(event) => setCampaignSearch(event.target.value)}
+            placeholder="Search campaigns"
+            className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:ring-2"
+          />
+
           <div className="mt-4 space-y-2">
             {loadingCampaigns ? <p className="text-sm text-slate-500">Loading campaigns...</p> : null}
 
@@ -319,7 +387,7 @@ export default function Home() {
               <p className="text-sm text-slate-500">No campaigns yet. Create your first campaign.</p>
             ) : null}
 
-            {campaigns.map((campaign) => (
+            {filteredCampaigns.map((campaign) => (
               <div
                 key={campaign.id}
                 className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 transition ${
@@ -328,22 +396,62 @@ export default function Home() {
                     : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
                 }`}
               >
-                <button
-                  onClick={() => setSelectedCampaignId(campaign.id)}
-                  className="flex-1 text-left"
-                  type="button"
-                >
-                  <p className="text-sm font-semibold">{campaign.name}</p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteCampaign(campaign.id)}
-                  className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
-                >
-                  Delete
-                </button>
+                {editingCampaignId === campaign.id ? (
+                  <div className="flex flex-1 flex-col gap-2">
+                    <input
+                      type="text"
+                      value={editingCampaignName}
+                      onChange={(event) => setEditingCampaignName(event.target.value)}
+                      className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm outline-none ring-teal-500 focus:ring-2"
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleUpdateCampaign(campaign.id)}
+                        className="rounded-md bg-teal-700 px-2 py-1 text-xs font-semibold text-white transition hover:bg-teal-600"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelEditCampaign}
+                        className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setSelectedCampaignId(campaign.id)}
+                    className="flex-1 text-left"
+                    type="button"
+                  >
+                    <p className="text-sm font-semibold">{campaign.name}</p>
+                  </button>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => beginEditCampaign(campaign.id)}
+                    className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteCampaign(campaign.id)}
+                    className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
+            {campaignSearch.trim() && filteredCampaigns.length === 0 ? (
+              <p className="text-sm text-slate-500">No campaigns match your search.</p>
+            ) : null}
           </div>
         </section>
 

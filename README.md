@@ -76,7 +76,7 @@ No login is implemented yet. You can add auth later.
 ## Deploy to Vercel
 
 1. Push repo to GitHub.
-2. Import project in Vercel and set the Root Directory to the repository root, not `web/`.
+2. Import project in Vercel.
 3. Add all environment variables in Vercel Project Settings, including FIREBASE_DATABASE_ID.
 4. Deploy.
 
